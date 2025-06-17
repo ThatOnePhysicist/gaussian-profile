@@ -1,10 +1,48 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from numpy._typing._array_like import NDArray
 from scipy.ndimage import gaussian_gradient_magnitude
 from PIL import Image
+import traceback
+import pandas as pd
+import matplotlib as mpl
+
+# Docstrings
+from typing import Any
+from numpy import floating
 
 
-def create_gaussian(size=1024, sigma=100, noise_level=0.0, black_line=False):
+# Formats plots to LaTeX style
+mpl.rcParams.update({
+    "text.usetex": True,
+    "font.family": "serif",  # Use LaTeX-style serif font
+    "font.serif": ["Computer Modern Roman"],  # Default LaTeX serif font
+    "text.latex.preamble": r"\usepackage{amsmath}"  # Optional, for math support
+})
+
+def create_gaussian(size=1024, sigma=100, noise_level=0.0, black_line=False) -> NDArray[floating[Any]] | NDArray[Any]:
+    """
+    Creates 2D gaussian images.
+
+    Parameters
+    ----------
+    size : int, default 1024
+        Size for image.
+    sigma : int, default 100
+        Measure of spread for the gaussian.
+    noise_level : float, default 0.0
+        Amount of randomly distributed noise to add to image. TODO: Not very useful when applying gaussian gradient filter.
+    black_line : bool, default False
+        Artificial black line inserted by zeroing values. 
+    
+    Returns
+    -------
+    Returns an n-dimensional array. 
+   
+    Notes
+    -----
+    https://en.wikipedia.org/wiki/Gaussian_function
+    """
     x = np.linspace(-size // 2, size // 2, size)
     y = np.linspace(-size // 2, size // 2, size)
     X, Y = np.meshgrid(x, y)
@@ -22,141 +60,133 @@ def create_gaussian(size=1024, sigma=100, noise_level=0.0, black_line=False):
         gaussian[400:410,row_index+20:row_index+22] = 0.0
     return gaussian
 
-def plot_all():
-    sigma_default = 100
-    sigma_wide = 1000
+def compute_fourier_transform(image) -> NDArray:
+    """
+    Computes Fourier transform of input image.
 
-    g_default = create_gaussian(sigma=sigma_default)
-    g_wide = create_gaussian(sigma=sigma_wide)
-    g_line = create_gaussian(sigma=sigma_default, black_line=True)
-
-    # Copy of g_line for gradient magnitude (so it doesn't get affected)
-    # g_line_for_grad = np.copy(g_line)
-    grad_mag = gaussian_gradient_magnitude(g_line, sigma=1)
-
-    f_default = compute_fourier_transform(g_default)
-    f_wide = compute_fourier_transform(g_wide)
-    f_line = compute_fourier_transform(g_line)
-
-    fig, axs = plt.subplots(2, 4, figsize=(20, 10))
-
-    axs[0, 0].imshow(g_default, cmap='gray')
-    axs[0, 0].set_title("Gaussian (σ=100)")
-    axs[0, 0].axis('off')
-
-    axs[0, 1].imshow(g_wide, cmap='gray')
-    axs[0, 1].set_title("Gaussian (σ=1000)")
-    axs[0, 1].axis('off')
-
-    axs[0, 2].imshow(g_line, cmap='gray')
-    axs[0, 2].set_title("Gaussian + Black Line")
-    axs[0, 2].axis('off')
-
-    axs[0, 3].imshow(g_line, cmap='gray')
-    axs[0, 3].set_title("Gradient Magnitude (scipy)")
-    axs[0, 3].axis('off')
-
-    axs[1, 0].imshow(f_default, cmap='gray')
-    axs[1, 0].set_title("Fourier (σ=100)")
-    axs[1, 0].axis('off')
-
-    axs[1, 1].imshow(f_wide, cmap='gray')
-    axs[1, 1].set_title("Fourier (σ=1000)")
-    axs[1, 1].axis('off')
-
-    axs[1, 2].imshow(f_line, cmap='gray')
-    axs[1, 2].set_title("Fourier (Black Line)")
-    axs[1, 2].axis('off')
-
-    axs[1, 3].imshow(grad_mag, cmap='gray')
-    axs[1, 3].set_title("Gradient Mag (again)")
-    axs[1, 3].axis('off')
-
-    plt.suptitle("2D Gaussians, Fourier Transforms, and Gradient Magnitude", fontsize=18)
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.9)
-    plt.show()
-
-def compute_fourier_transform(image):
+    Parameters
+    ----------
+    image : array like
+        Input image. 
+    
+    Returns
+    -------
+    magnitude : NDArray
+        Returns an n-dimensional array. 
+    """
     fft = np.fft.fft2(image)
     fft_shifted = np.fft.fftshift(fft)
     magnitude = np.log1p(np.abs(fft_shifted))
     return magnitude
 
-def plot_image_analysis_from_files(ideal_path, noisy_path):
+def one_dimensional_plot(image:NDArray) -> tuple[pd.Series, pd.Series]:
+    """
+    Computes the 1-dimensional summations of pixel values of an image.
+
+    Parameters
+    ----------
+    image : NDArray
+        Image in array form.
+    
+    Returns
+    -------
+    df_col, df_row : pd.Series[Any], pd.Series[Any]
+        Tuple of series representing column and row sums of input image.
+    """
+    df = pd.DataFrame(image)
+    df_col = df.sum(axis=1)
+    df_row = df.sum(axis=0)
+    return df_col, df_row
+
+def plot_image_analysis_from_files(ideal_path:str) -> None:
+    """
+    Generates 2x4 subplots of image, filtered image, and respective row and column 1-D plots.
+
+    Parameters
+    ----------
+    ideal_path : str
+        Path to image being plotted.
+    
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    The 2x4 image is arranged in the following configuration,
+    1st row: row sum of unfiltered image, unfiltered image, filtered image, row sum of filtered image
+    2nd row: empty, col sum of unfiltered image, col sum of filtered image, empty.
+
+    For the gridspec_kw={"height_ratios":[a,b], "width_ratios":[c,d,e,f]}
+    argument in subplots, I haven't seen sufficient documentation on this
+    so I'll decipher the process.
+    
+    `a` and `b` are heights for the 1st and 2nd row respectively,
+    `c`, `d`, `e`, and `f` represent the widths for columns 1, 2, 3, and 4 respectively
+    accounting for the full 2x4 grid. Finally, the dimensions are relative to the largest value, 
+    i.e. for height_rations = [2, 1] means the 1st row is twice the height of the 2nd row. 
+    Likewise, for width_rations = [1, 2, 2, 1], the first and last columns are half the 
+    width of the 2nd and 3rd column. 
+    """
     ideal_img = Image.open(ideal_path)
-    ideal_img_filter = ideal_img.convert('F')
-    noisy_img = Image.open(noisy_path)
-    noisy_img_filter = noisy_img.convert('F')
+    ideal_img_filter = ideal_img.convert('F') # F converts to black and white
 
     ideal_array = np.array(ideal_img_filter, dtype=np.float32)
-    noisy_array = np.array(noisy_img_filter, dtype=np.float32)
+    row_ideal, col_ideal = one_dimensional_plot(ideal_array)
 
+    grad_ideal = gaussian_gradient_magnitude(ideal_array, sigma=1)
+    grad_row, grad_col = one_dimensional_plot(grad_ideal)
 
-    fft_ideal = compute_fourier_transform(ideal_array)
-    fft_noisy = compute_fourier_transform(noisy_array)
-
-    grad_ideal = gaussian_gradient_magnitude(ideal_array, sigma=100)
-    grad_noisy = gaussian_gradient_magnitude(noisy_array, sigma=100)
-
-
-    fig, [[col_base, base_case, filter_case, col_filter], [empty_1, row_base, row_filter, empty_2]] = plt.subplots(2, 4, 
-                            figsize=(12, 12),
-                            gridspec_kw={"height_ratios":[1,2], 
-                                         "width_ratios":[1,2,2,1]})
-
+    fig, [
+        [row_base, base_case, filter_case, row_filter], 
+        [empty_1, col_base, col_filter, empty_2]
+        ] = plt.subplots(2, 4, figsize=(16, 9),
+                            gridspec_kw={
+                                "height_ratios":[2,1], 
+                                "width_ratios":[1,2,2,1]
+                                })
+    
     values = {
-        col_base : ["off", "Fourier Transform (Noisy)", fft_noisy,"YlGnBu"],
-        base_case : ["off", "Ideal Image", ideal_img],
-        filter_case : ["off", "Noisy Image", noisy_img], 
-        col_filter : ["off", "Gradient Magnitude (Ideal)", grad_ideal, "YlGnBu"],
-        row_base : ["off", "Gradient Magnitude (Noisy)", grad_noisy, "YlGnBu"], 
-        row_filter : ["off", "Fourier Transform (Ideal)", fft_ideal, "YlGnBu"]
+        col_base: ["on", "col_b", col_ideal],
+        base_case: ["on", "img_b", ideal_array],
+        filter_case: ["on", "img_f", grad_ideal], 
+        col_filter: ["on", "col_f", grad_col],
+        row_base: ["on", "row_b", row_ideal], 
+        row_filter: ["on", "row_f", grad_row]
     }
-
     try:
-        # print(1/9)
         for k,v in values.items():
             k.axis(v[0])
             k.set_title(v[1])
-            k.imshow(v[2])
+            match v[1][0:3]:
+                case "row":
+                    k.plot(v[-1], np.arange(len(v[-1])))
+                    k.set_ylim(0, len(v[-1]))
+                    k.invert_yaxis()
+                case "col":
+                    k.plot(np.arange(len(v[-1])), v[-1])
+                    k.set_xlim(0, len(v[-1]))
+                case "img":
+                    img_array = v[-1]
+                    height, width = img_array.shape
+                    k.imshow(img_array, cmap='gray', origin='upper', extent=[0, width, height, 0])
+                    k.set_xlim(0, width)
+                    k.set_ylim(height, 0)
+                    k.set_aspect("auto")
+
 
         empty_1.set_visible(False)
         empty_2.set_visible(False)
-    except:
-        # base_case.set_title("Ideal image").axis("off").imshow(ideal_img)
-        base_case.axis('off')
-        base_case.set_title("Ideal Image")
-        base_case.imshow(ideal_img)
-
-        filter_case.imshow(noisy_img)
-        filter_case.set_title("Noisy Image")
-        filter_case.axis('off')
-
-        row_filter.imshow(fft_ideal, cmap='YlGnBu')
-        row_filter.set_title("Fourier Transform (Ideal)")
-        row_filter.axis('off')
-
-        col_base.imshow(fft_noisy, cmap='YlGnBu')
-        col_base.set_title("Fourier Transform (Noisy)")
-        col_base.axis('off')
-
-        col_filter.imshow(grad_ideal, cmap='YlGnBu')
-        col_filter.set_title("Gradient Magnitude (Ideal)")
-        col_filter.axis('off')
-
-        row_base.imshow(grad_noisy, cmap='YlGnBu')
-        row_base.set_title("Gradient Magnitude (Noisy)")
-        row_base.axis('off')
-
-        empty_1.set_visible(False)
-        empty_2.set_visible(False)
-
-    plt.suptitle("Image Analysis: Ideal vs. Noisy", fontsize=16)
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.93)
-    plt.show()
+        plt.suptitle("Image Analysis: Ideal vs. Noisy", fontsize=16)
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.93)
+        plt.show()
+    except Exception as e:
+        traceback.print_exc()
 
 
+def main():
+    plot_image_analysis_from_files("ideal.png")
+    
 if __name__ == "__main__":
-    plot_image_analysis_from_files("ideal.png", "profile.jpg")
+    main()
